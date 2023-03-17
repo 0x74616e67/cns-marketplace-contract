@@ -8,9 +8,7 @@ const config: HardhatUserConfig = {
     // conflux testnet
     ct: {
       url: "https://test.confluxrpc.com",
-      accounts: [
-        "49365cc6377e5061abc935bf7ae9056ea568e4322ddb7babb5cc64abf8434dc5",
-      ],
+      accounts: [""],
       chainId: 1,
     },
     // TODO conflux mainnet

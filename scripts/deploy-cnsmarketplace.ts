@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { conflux } from "hardhat";
+import { VAULT, NAMEWRAPPER, STORE } from "./config";
 
 async function main() {
   const [signer] = await conflux.getSigners();
@@ -10,7 +11,7 @@ async function main() {
 
   console.log("deploy CNSMarketplace contract");
 
-  const receipt = await CNSMarketplace.constructor()
+  const receipt = await CNSMarketplace.constructor(STORE, VAULT, NAMEWRAPPER)
     .sendTransaction({
       from: signer.address,
     })

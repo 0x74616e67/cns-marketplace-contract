@@ -4,35 +4,40 @@ pragma solidity ^0.8.9;
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "./IStore.sol";
 
-// error NotListed(address nftAddress, uint256 tokenId);
-// error AlreadyListed(address nftAddress, uint256 tokenId);
-// error PriceNotMet(address nftAddress, uint256 tokenId, uint256 price);
+interface IStore {
+  function addTokenId(uint256 _tokenId) external;
+  function removeTokenId(uint256 _tokenId) external;
+}
+
+// error NotListed(uint256 tokenId);
+// error AlreadyListed(uint256 tokenId);
+// error PriceNotMet(uint256 tokenId, uint256 price);
 // error NotOwner();
 // error PriceMustBeAboveZero(uint256);
 // error NotApprovedForMarketplace();
-// error NotInWhitelist(address nftAddress);
 // error FeeMustBeGreZeroAndLreOneHundred(uint256);
 
 /**
 Error Code:
-
 1. 1001, Not listed
 2. 1002, Already listed
-3. 1003, Price not met
+3. 1003, Price + Fee not met
 4. 1004, Not owner
 5. 1005, Price must be above zero
-6. 1006, Not approved for marketplace
-8. 1008, Not in whitelist
-9. 1009, Fee must be greater or equal to 0, and less or equal to 100
+6. 1006, Not approved to marketplace
+9. 1009, Fee must be greater or equal to 0, and less or equal to 1000
 */
 
 contract CNSMarketplace is ReentrancyGuard, Ownable {
 
+  // tokenIds store
   address public store;
 
   address public vault;
+
+  // cns namewrapper 1155 compatible contract address
+  address public namewrapper;
 
   // 25 / 1000
   uint8 public fee = 25;
@@ -44,20 +49,17 @@ contract CNSMarketplace is ReentrancyGuard, Ownable {
 
   event ItemListed(
     address indexed seller,
-    address indexed nftAddress,
     uint256 indexed tokenId,
     uint256 price
   );
 
   event ItemCanceled(
     address indexed seller,
-    address indexed nftAddress,
     uint256 indexed tokenId
   );
 
   event ItemBought(
     address indexed buyer,
-    address indexed nftAddress,
     uint256 indexed tokenId,
     uint256 price
   );
@@ -72,55 +74,40 @@ contract CNSMarketplace is ReentrancyGuard, Ownable {
     address indexed next
   );
 
-  event UpdateWhitelist(
-    address indexed nftAddress,
-    bool indexed flag
+  event UpdateNamewrapper(
+    address indexed prev,
+    address indexed next
   );
 
   event UpdateFee(
     uint8 prev,
-    uint8 curr
+    uint8 indexed curr
   );
 
-  mapping(address => mapping(uint256 => Listing)) private listings;
-  mapping(address => bool) public whitelist;
+  // tokenId => Listing
+  mapping(uint256 => Listing) private listings;
 
-  modifier isListed(
-    address nftAddress,
-    uint256 tokenId
-  ) {
-    Listing memory listing = listings[nftAddress][tokenId];
+  modifier isListed(uint256 tokenId) {
+    Listing memory listing = listings[tokenId];
 
     require(listing.price > 0, "1001, Not listed");
 
     _;
   }
 
-  modifier isNotListed(
-    address nftAddress,
-    uint256 tokenId
-  ) {
-    Listing memory listing = listings[nftAddress][tokenId];
+  modifier isNotListed(uint256 tokenId) {
+    Listing memory listing = listings[tokenId];
 
     require(listing.price <= 0, "1002, Already listed");
 
     _;
   }
 
-  modifier isApproved(address nftAddress, uint256 tokenId) {
-    IERC1155 nft = IERC1155(nftAddress);
-    
-    require(nft.isApprovedForAll(listings[nftAddress][tokenId].seller, address(this)), "1006, Not approved for marketplace");
-
-    _;
-  }
-
   modifier isOwner(
-    address nftAddress,
     uint256 tokenId,
     address spender
   ) {
-    IERC1155 nft = IERC1155(nftAddress);
+    IERC1155 nft = IERC1155(namewrapper);
     uint256 balance = nft.balanceOf(spender, tokenId);
     
     require(balance > 0, "1004, Not owner");
@@ -128,10 +115,10 @@ contract CNSMarketplace is ReentrancyGuard, Ownable {
     _;
   }
 
-  function updateWhitelist(address nftAddress, bool flag) public onlyOwner {
-    whitelist[nftAddress] = flag;
-
-    emit UpdateWhitelist(nftAddress, flag);
+  constructor(address _store, address _vault, address _namewrapper) {
+      store = _store;
+      vault = _vault;
+      namewrapper = _namewrapper;
   }
 
   function updateStore(address _store) public onlyOwner {
@@ -148,6 +135,13 @@ contract CNSMarketplace is ReentrancyGuard, Ownable {
     emit UpdateVault(prev, _vault);
   }
 
+  function updateNamewrapper(address _namewrapper) public onlyOwner {
+    address prev = namewrapper;
+    namewrapper = _namewrapper;
+
+    emit UpdateNamewrapper(prev, _namewrapper);
+  }
+
   function updateFee(uint8 _fee) public onlyOwner {
     require(fee >= 0 && fee <= 1000, "1009, Fee must be greater or equal to 0, and less or equal to 1000");
     
@@ -158,60 +152,56 @@ contract CNSMarketplace is ReentrancyGuard, Ownable {
   }
 
   function listItem(
-    address nftAddress,
     uint256 tokenId,
     uint256 price
-  ) external isNotListed(nftAddress, tokenId) isOwner(nftAddress, tokenId, msg.sender) {
-    require(whitelist[nftAddress], "1008, Not in whitelist");
-
+  ) public isNotListed(tokenId) isOwner(tokenId, msg.sender) {
     require(price > 0, "1005, Price must be above zero");
     
-    IERC1155 nft = IERC1155(nftAddress);
+    IERC1155 nft = IERC1155(namewrapper);
 
-    require(nft.isApprovedForAll(msg.sender, address(this)), "1006, Not approved for marketplace");
+    require(nft.isApprovedForAll(msg.sender, address(this)), "1006, Not approved to marketplace");
     
-    listings[nftAddress][tokenId] = Listing(price, msg.sender);
+    listings[tokenId] = Listing(price, msg.sender);
 
-    // add nft contract address and tokenId to store
-    IStore(store).addTokenId(nftAddress, tokenId);
+    // add nft tokenId to store
+    IStore(store).addTokenId(tokenId);
 
-    emit ItemListed(msg.sender, nftAddress, tokenId, price);
+    emit ItemListed(msg.sender, tokenId, price);
   }
 
   function cancelListing(
-    address nftAddress, uint256 tokenId
-  ) external isListed(nftAddress, tokenId) isOwner(nftAddress, tokenId, msg.sender) {
-    delete listings[nftAddress][tokenId];
+    uint256 tokenId
+  ) public isListed(tokenId) isOwner(tokenId, msg.sender) {
+    delete listings[tokenId];
 
     // remove tokenId in contract tokenId set
-    IStore(store).removeTokenId(nftAddress, tokenId);
+    IStore(store).removeTokenId(tokenId);
 
-    emit ItemCanceled(msg.sender, nftAddress, tokenId);
+    emit ItemCanceled(msg.sender, tokenId);
   }
 
   function buyItem(
-    address nftAddress,
     uint256 tokenId
   )
-    external
+    public
     payable
-    isListed(nftAddress, tokenId)
+    isListed(tokenId)
     nonReentrant
   {
-    Listing memory listedItem = listings[nftAddress][tokenId];
+    Listing memory listedItem = listings[tokenId];
 
-    require(msg.value * 1000 == listedItem.price * (1000 + fee), "1003, Price not met");
+    require(msg.value * 1000 == listedItem.price * (1000 + fee), "1003, Price + Fee not met");
 
-    IERC1155 nft = IERC1155(nftAddress);
+    IERC1155 nft = IERC1155(namewrapper);
 
-    require(nft.isApprovedForAll(listedItem.seller, address(this)), "1006, Not approved for marketplace");
+    require(nft.isApprovedForAll(listedItem.seller, address(this)), "1006, Not approved to marketplace");
     
-    delete listings[nftAddress][tokenId];
-
-    IERC1155(nftAddress).safeTransferFrom(listedItem.seller, msg.sender, tokenId, 1, "");
+    delete listings[tokenId];
 
     // remove tokenId in contract tokenId set
-    IStore(store).removeTokenId(nftAddress, tokenId);
+    IStore(store).removeTokenId(tokenId);
+
+    IERC1155(namewrapper).safeTransferFrom(listedItem.seller, msg.sender, tokenId, 1, "");
 
     // send value to seller directly
     uint256 serviceFee = msg.value - listedItem.price;
@@ -220,42 +210,23 @@ contract CNSMarketplace is ReentrancyGuard, Ownable {
 
     require(successOfSendToSeller && successOfSendToVault, "Transfer failed");
 
-    emit ItemBought(msg.sender, nftAddress, tokenId, listedItem.price);
+    emit ItemBought(msg.sender, tokenId, listedItem.price);
   }
 
   function updateListing(
-    address nftAddress,
     uint256 tokenId,
     uint256 newPrice
-  ) external isListed(nftAddress, tokenId) isOwner(nftAddress, tokenId, msg.sender) {
+  ) public isListed(tokenId) isOwner(tokenId, msg.sender) {
     require(newPrice > 0, "1005, Price must be above zero");
 
-    listings[nftAddress][tokenId].price = newPrice;
+    listings[tokenId].price = newPrice;
 
-    emit ItemListed(msg.sender, nftAddress, tokenId, newPrice);
+    emit ItemListed(msg.sender, tokenId, newPrice);
   }
 
   function getListing(
-    address nftAddress,
     uint256 tokenId
-  ) external view returns (Listing memory) {
-    return listings[nftAddress][tokenId];
-  }
-
-  // move to util contract
-  function getListingContracts(uint256 _skip, uint256 _limit) public view returns(address[] memory) {
-    return IStore(store).getContracts(_skip, _limit);
-  }
-
-  function getListingTokenIdsOfContract(address _contract, uint256 _skip, uint256 _limit) public view returns (Listing[] memory) {
-    uint256[] memory tokenIds = IStore(store).getTokenIds(_contract, _skip, _limit);
-
-    Listing[] memory listingTokenIds = new Listing[](tokenIds.length);
-
-    for (uint256 i = 0; i < tokenIds.length; i++) {
-      listingTokenIds[i] = this.getListing(_contract, tokenIds[i]);
-    }
-
-    return listingTokenIds;
+  ) public view returns (Listing memory) {
+    return listings[tokenId];
   }
 }
